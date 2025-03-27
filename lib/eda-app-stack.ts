@@ -23,9 +23,25 @@ export class EDAAppStack extends cdk.Stack {
     });
 
     // Integration infrastructure
-    const queue = new sqs.Queue(this, "img-created-queue", {
-      receiveMessageWaitTime: cdk.Duration.seconds(5),
+    const imageProcessQueue = new sqs.Queue(this, "img-created-queue", {
+      receiveMessageWaitTime: cdk.Duration.seconds(10), 
     });
+
+    
+    const newImageTopic = new sns.Topic(this, "NewImageTopic", {
+      displayName: "New Image topic",
+    });
+
+    // S3 --> SNS
+    imagesBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.SnsDestination(newImageTopic)
+    );
+
+    // SNS --> SQS
+    newImageTopic.addSubscription(
+      new subs.SqsSubscription(imageProcessQueue)
+    );
 
     // Lambda functions
     const processImageFn = new lambdanode.NodejsFunction(
@@ -39,14 +55,8 @@ export class EDAAppStack extends cdk.Stack {
       }
     );
 
-    // S3 --> SQS
-    imagesBucket.addEventNotification(
-      s3.EventType.OBJECT_CREATED,
-      new s3n.SqsDestination(queue)
-    );
-
     // SQS --> Lambda
-    const newImageEventSource = new events.SqsEventSource(queue, {
+    const newImageEventSource = new events.SqsEventSource(imageProcessQueue, {
       batchSize: 5,
       maxBatchingWindow: cdk.Duration.seconds(5),
     });
@@ -62,4 +72,5 @@ export class EDAAppStack extends cdk.Stack {
     });
   }
 }
+
 
