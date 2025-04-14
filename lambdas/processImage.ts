@@ -7,8 +7,14 @@ import {
   S3Client,
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
+import {
+  DynamoDBClient,
+  PutItemCommand,
+} from "@aws-sdk/client-dynamodb";
 
 const s3 = new S3Client();
+const dynamo = new DynamoDBClient();
+const tableName = process.env.TABLE_NAME!;
 
 export const handler: SQSHandler = async (event) => {
   console.log("Event ", JSON.stringify(event));
@@ -23,6 +29,13 @@ export const handler: SQSHandler = async (event) => {
         const srcBucket = s3e.bucket.name;
         // Object key may have spaces or unicode non-ASCII characters.
         const srcKey = decodeURIComponent(s3e.object.key.replace(/\+/g, " "));
+
+        const lowerKey = srcKey.toLowerCase();
+        if (!(lowerKey.endsWith(".jpeg") || lowerKey.endsWith(".png"))) {
+          console.error(`Unsupported file type: ${srcKey}`);
+          throw new Error(`Invalid image format: ${srcKey}`);
+        }
+
         let origimage = null;
         try {
           // Download the image from the S3 source bucket.
@@ -32,8 +45,20 @@ export const handler: SQSHandler = async (event) => {
           };
           origimage = await s3.send(new GetObjectCommand(params));
           // Process the image ......
+
+          await dynamo.send(
+            new PutItemCommand({
+              TableName: tableName,
+              Item: {
+                id: { S: srcKey },
+              },
+            })
+          );
+
+          console.log(`Inserted ${srcKey} into table ${tableName}`);
         } catch (error) {
           console.log(error);
+          throw error;
         }
       }
     }

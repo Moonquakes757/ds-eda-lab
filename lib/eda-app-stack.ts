@@ -8,6 +8,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 
 import { Construct } from "constructs";
 
@@ -56,7 +57,12 @@ export class EDAAppStack extends cdk.Stack {
     // === SNS -> Mailer Queue: no filter for now (can adjust later) ===
     newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
 
-    // === Lambda function for processing uploaded images ===
+    const imageTable = new dynamodb.Table(this, "ImageTable", {
+      partitionKey: { name: "id", type: dynamodb.AttributeType.STRING },
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    });
+
     const processImageFn = new lambdanode.NodejsFunction(
       this,
       "ProcessImageFn",
@@ -65,8 +71,13 @@ export class EDAAppStack extends cdk.Stack {
         entry: `${__dirname}/../lambdas/processImage.ts`,
         timeout: cdk.Duration.seconds(15),
         memorySize: 128,
+        environment: {
+          TABLE_NAME: imageTable.tableName,
+        },
       }
     );
+
+    imageTable.grantWriteData(processImageFn);
 
     const mailerFn = new lambdanode.NodejsFunction(this, "mailer-function", {
       runtime: lambda.Runtime.NODEJS_16_X,
