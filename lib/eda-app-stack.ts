@@ -10,7 +10,6 @@ import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as iam from "aws-cdk-lib/aws-iam";
 
 import { Construct } from "constructs";
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export class EDAAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -22,31 +21,42 @@ export class EDAAppStack extends cdk.Stack {
       publicReadAccess: false,
     });
 
-    // === Queues ===
+    // === Dead Letter Queue for failed image processing ===
+    const imageDLQ = new sqs.Queue(this, "image-dlq");
+
+    // === SQS queue for image upload events ===
     const imageProcessQueue = new sqs.Queue(this, "img-created-queue", {
       receiveMessageWaitTime: cdk.Duration.seconds(10),
+      deadLetterQueue: {
+        maxReceiveCount: 3,
+        queue: imageDLQ,
+      },
     });
 
     const mailerQ = new sqs.Queue(this, "mailer-queue", {
       receiveMessageWaitTime: cdk.Duration.seconds(10),
     });
 
-    // === SNS Topic ===
+    // === SNS topic for new image and metadata messages ===
     const newImageTopic = new sns.Topic(this, "NewImageTopic", {
       displayName: "New Image topic",
     });
 
-    // S3 --> SNS
+    // === S3 -> SNS: trigger topic when an object is created ===
     imagesBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
       new s3n.SnsDestination(newImageTopic)
     );
 
-    // SNS --> SQS 
-    newImageTopic.addSubscription(new subs.SqsSubscription(imageProcessQueue));
+    // === SNS -> SQS: only route upload events (no metadata_type) to image queue ===
+    newImageTopic.addSubscription(
+      new subs.SqsSubscription(imageProcessQueue)
+    );
+
+    // === SNS -> Mailer Queue: no filter for now (can adjust later) ===
     newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
 
-    // === Lambda functions ===
+    // === Lambda function for processing uploaded images ===
     const processImageFn = new lambdanode.NodejsFunction(
       this,
       "ProcessImageFn",
@@ -65,22 +75,22 @@ export class EDAAppStack extends cdk.Stack {
       entry: `${__dirname}/../lambdas/mailer.ts`,
     });
 
-    // === Event sources ===
-    // imageProcessQueue --> processImageFn
-    const newImageEventSource = new events.SqsEventSource(imageProcessQueue, {
-      batchSize: 5,
-      maxBatchingWindow: cdk.Duration.seconds(5),
-    });
-    processImageFn.addEventSource(newImageEventSource);
+    // === SQS -> Lambda event source binding ===
+    processImageFn.addEventSource(
+      new events.SqsEventSource(imageProcessQueue, {
+        batchSize: 5,
+        maxBatchingWindow: cdk.Duration.seconds(5),
+      })
+    );
 
-    // mailerQ --> mailerFn
-    const newImageMailEventSource = new events.SqsEventSource(mailerQ, {
-      batchSize: 5,
-      maxBatchingWindow: cdk.Duration.seconds(5),
-    });
-    mailerFn.addEventSource(newImageMailEventSource);
+    mailerFn.addEventSource(
+      new events.SqsEventSource(mailerQ, {
+        batchSize: 5,
+        maxBatchingWindow: cdk.Duration.seconds(5),
+      })
+    );
 
-    // === Permissions ===
+    // === Grant S3 read access to image processor Lambda ===
     imagesBucket.grantRead(processImageFn);
 
     mailerFn.addToRolePolicy(
@@ -95,12 +105,9 @@ export class EDAAppStack extends cdk.Stack {
       })
     );
 
-    // === Output ===
+    // === CDK output: bucket name ===
     new cdk.CfnOutput(this, "bucketName", {
       value: imagesBucket.bucketName,
     });
   }
 }
-
-
-
