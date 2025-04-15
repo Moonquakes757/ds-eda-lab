@@ -39,6 +39,11 @@ export class EDAAppStack extends cdk.Stack {
       receiveMessageWaitTime: cdk.Duration.seconds(10),
     });
 
+    // === SQS queue for metadata updates ===
+    const metadataQueue = new sqs.Queue(this, "metadata-queue", {
+      receiveMessageWaitTime: cdk.Duration.seconds(10),
+    });
+
     // === SNS topic for new image and metadata messages ===
     const newImageTopic = new sns.Topic(this, "NewImageTopic", {
       displayName: "New Image topic",
@@ -57,6 +62,17 @@ export class EDAAppStack extends cdk.Stack {
 
     // === SNS -> Mailer Queue: no filter for now (can adjust later) ===
     newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
+
+    // === SNS -> Metadata Queue: filter only messages with metadata_type ===
+    newImageTopic.addSubscription(
+      new subs.SqsSubscription(metadataQueue, {
+        filterPolicy: {
+          metadata_type: sns.SubscriptionFilter.stringFilter({
+            matchPrefixes: ["Caption", "Date", "Name"],
+          }),
+        },
+      })
+    );
 
     const imageTable = new dynamodb.Table(this, "ImageTable", {
       partitionKey: { name: "id", type: dynamodb.AttributeType.STRING },
@@ -95,6 +111,19 @@ export class EDAAppStack extends cdk.Stack {
       memorySize: 128,
     });
 
+    // === Lambda function to update image metadata in DynamoDB ===
+    const addMetadataFn = new lambdanode.NodejsFunction(this, "AddMetadataFn", {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, "../lambdas/addMetadata.ts"),
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 128,
+      environment: {
+        TABLE_NAME: imageTable.tableName,
+      },
+    });
+
+    imageTable.grantWriteData(addMetadataFn);
+
     // === SQS -> Lambda event source binding ===
     processImageFn.addEventSource(
       new events.SqsEventSource(imageProcessQueue, {
@@ -112,6 +141,13 @@ export class EDAAppStack extends cdk.Stack {
 
     removeImageFn.addEventSource(
       new events.SqsEventSource(imageDLQ, {
+        batchSize: 5,
+        maxBatchingWindow: cdk.Duration.seconds(5),
+      })
+    );
+
+    addMetadataFn.addEventSource(
+      new events.SqsEventSource(metadataQueue, {
         batchSize: 5,
         maxBatchingWindow: cdk.Duration.seconds(5),
       })
