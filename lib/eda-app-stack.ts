@@ -9,6 +9,7 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as path from "path";
 
 import { Construct } from "constructs";
 
@@ -86,6 +87,14 @@ export class EDAAppStack extends cdk.Stack {
       entry: `${__dirname}/../lambdas/mailer.ts`,
     });
 
+    // === Lambda function to remove invalid files from S3 (triggered by DLQ) ===
+    const removeImageFn = new lambdanode.NodejsFunction(this, "RemoveImageFn", {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, "../lambdas/removeImage.ts"),
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 128,
+    });
+
     // === SQS -> Lambda event source binding ===
     processImageFn.addEventSource(
       new events.SqsEventSource(imageProcessQueue, {
@@ -101,8 +110,16 @@ export class EDAAppStack extends cdk.Stack {
       })
     );
 
-    // === Grant S3 read access to image processor Lambda ===
+    removeImageFn.addEventSource(
+      new events.SqsEventSource(imageDLQ, {
+        batchSize: 5,
+        maxBatchingWindow: cdk.Duration.seconds(5),
+      })
+    );
+
+    // === Grant S3 access permissions ===
     imagesBucket.grantRead(processImageFn);
+    imagesBucket.grantDelete(removeImageFn);
 
     mailerFn.addToRolePolicy(
       new iam.PolicyStatement({
