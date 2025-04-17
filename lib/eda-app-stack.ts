@@ -44,6 +44,11 @@ export class EDAAppStack extends cdk.Stack {
       receiveMessageWaitTime: cdk.Duration.seconds(10),
     });
 
+    // === SQS queue for moderator status updates ===
+    const statusQueue = new sqs.Queue(this, "status-queue", {
+      receiveMessageWaitTime: cdk.Duration.seconds(10),
+    });
+
     // === SNS topic for new image and metadata messages ===
     const newImageTopic = new sns.Topic(this, "NewImageTopic", {
       displayName: "New Image topic",
@@ -69,6 +74,17 @@ export class EDAAppStack extends cdk.Stack {
         filterPolicy: {
           metadata_type: sns.SubscriptionFilter.stringFilter({
             matchPrefixes: ["Caption", "Date", "Name"],
+          }),
+        },
+      })
+    );
+
+    // === SNS -> Status Queue: exclude metadata_type messages ===
+    newImageTopic.addSubscription(
+      new subs.SqsSubscription(statusQueue, {
+        filterPolicy: {
+          metadata_type: sns.SubscriptionFilter.stringFilter({
+            matchPrefixes: ["Status"],
           }),
         },
       })
@@ -124,6 +140,19 @@ export class EDAAppStack extends cdk.Stack {
 
     imageTable.grantWriteData(addMetadataFn);
 
+    // === Lambda function to update image review status ===
+    const updateStatusFn = new lambdanode.NodejsFunction(this, "UpdateStatusFn", {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, "../lambdas/updateStatus.ts"),
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 128,
+      environment: {
+        TABLE_NAME: imageTable.tableName,
+      },
+    });
+
+    imageTable.grantWriteData(updateStatusFn);
+
     // === SQS -> Lambda event source binding ===
     processImageFn.addEventSource(
       new events.SqsEventSource(imageProcessQueue, {
@@ -148,6 +177,13 @@ export class EDAAppStack extends cdk.Stack {
 
     addMetadataFn.addEventSource(
       new events.SqsEventSource(metadataQueue, {
+        batchSize: 5,
+        maxBatchingWindow: cdk.Duration.seconds(5),
+      })
+    );
+
+    updateStatusFn.addEventSource(
+      new events.SqsEventSource(statusQueue, {
         batchSize: 5,
         maxBatchingWindow: cdk.Duration.seconds(5),
       })
