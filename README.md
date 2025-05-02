@@ -2,7 +2,7 @@
 
 __Name:__ Shaohua Xu 20108871
 
-__Demo__: ....URL of YouTube demo ......
+__Demo__: [....URL of YouTube demo ......](https://www.youtube.com/watch?v=UNmtV2FU9Qk)
 
 This repository contains the implementation of a skeleton design for an application that manages a photo gallery, illustrated below. The app uses an event-driven architecture and is deployed on the AWS platform using the CDK framework for infrastructure provisioning.
 
